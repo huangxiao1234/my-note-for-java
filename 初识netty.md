@@ -170,15 +170,20 @@ public class NIOClient {
 
 根据上图，重新梳理一下`netty`如何完成非阻塞IO：
 
-* `Boss Group`的`NioEventGroup`（虽然叫Group，但其实就是一个线程）会对应一个`ServerSocketChannel`，该`Channel`会注册到当前`NioEventGroup`的`Selector`中，并监听`8888`端口
-* `Client`请求连接`8888`端口，`selector`接收到`accept`事件，进入`NioEventLoop`，执行`processSelectedKeys()`方法(其实就是前面代码中while循环做的事)，从`SelectedKeys`中获取对应事件`key`相关的变量（是可以获得的，请看前面NIo编写的Server代码）
-* `accept`事件就是调用`Selector`对应的`ServerSocketChannel`执行`accept`方法就能获得`Client`的`SocketChannel`
-* 从`WorkerGroup`中选择一个`NioEventGroup`，将该`SocketChannel`注册到该`NioEventGroup`的`Selector`中（为了区分称为`SelectorB`）
-* 这样，`Client`往`Channel`写数据时，触发`READ`事件，`SelectorB`就能够感知到，不需要经过`Boss Group`
-* 处理时，同样是进入`NioEventLoop`，经过`processSelectoedKeys（）`时，能够获得事件对应的`Channel`，此时为该`Channel`新建一个线程，线程中执行`Pipline`的`ChannelHandler`真正执行业务
+1. `Boss Group`的`NioEventGroup`（虽然叫Group，但其实就是一个线程）会对应一个`ServerSocketChannel`，该`Channel`会注册到当前`NioEventGroup`的`Selector`中，并监听`8888`端口
+2. `Client`请求连接`8888`端口，`selector`接收到`accept`事件，进入`NioEventLoop`，执行`processSelectedKeys()`方法(其实就是前面代码中while循环做的事)，从`SelectedKeys`中获取对应事件`key`相关的变量（是可以获得的，请看前面NIo编写的Server代码）
+3. `accept`事件就是调用`Selector`对应的`ServerSocketChannel`执行`accept`方法就能获得`Client`的`SocketChannel`
+4. 从`WorkerGroup`中选择一个`NioEventGroup`，将该`SocketChannel`注册到该`NioEventGroup`的`Selector`中（为了区分称为`SelectorB`）
+5. 这样，`Client`往`Channel`写数据时，触发`READ`事件，`SelectorB`就能够感知到，不需要经过`Boss Group`
+6. 处理时，同样是进入`NioEventLoop`，经过`processSelectoedKeys（）`时，能够获得事件对应的`Channel`，此时为该`Channel`新建一个线程，线程中执行`Pipline`的`ChannelHandler`真正执行业务
   * 这里的`pipline`可以理解为按顺序存放着一系列的`ChannelHandler`的集合
   * 经过`pipline`就会依次执行`ChannelHandler`
-* 要注意的是，一个`Client`对应一个`SocketChannel`对应一个`Pipeline`，一个`Pipline`中有多个`Handler`，`Selector`处理事件并获取`Channel`只会在同一个线程`NioEventGroup`中进行，获取到`Channel`后才会创建新的线程执行`pipline`
+7. 要注意的是，一个`Client`对应一个`SocketChannel`对应一个`Pipeline`，一个`Pipline`中有多个`Handler`，`Selector`处理事件并获取`Channel`只会在同一个线程`NioEventGroup`中进行，获取到`Channel`后才会创建新的线程执行`pipline`
+8. 补充：哪里体现了多`Reactor`?
+   * 注意到`Worker Group`中有多个`NioEventGroup`，对应多个`Selector`
+   * `第4步`涉及`NioEventGroup`的时候体现了多`Reactor`，可以根据不同策略选择将`Channel`交给哪一个`Selector`进行绑定
+   * 默认的策略是，如果`Worker Group`有8个`NioEventGroup`，则每来一个`Client`都会将其绑定到剩余的`NioEventGroup`中，如果有8个`Client`，则刚好每个`NioEventGroup`的`Selector`都绑定了一个`Channel`
+   * 此时如果来了第9个`Client`，则绑定给第一个`NioEventGroup`，依次类推
 
 
 
