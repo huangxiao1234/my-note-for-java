@@ -304,6 +304,8 @@
 
     3. ```getClients(url)```就是通过url与provider服务建立起连接，注意了，在服务引用时dubbo就已经将连接建立起来
 
+    4. 这里的invoker其实就是一个已经与服务器建立好连接的connection
+
 12. 最终，invoker会被返回到第六步，作为ReferenceBean的代理对象保存在Spring容器中
 
 13. 也就意味着，当```orderServiceImp```要调用```userService```的方法时，会使用到其建立好的连接，直接向provider发送请求获取方法调用的结果，这部分在服务调用部分会说明
@@ -356,7 +358,7 @@
       ```
 
 4. 而```invoker.invoke(invocation)```就是使用服务引用时绑定好的```client```与```Provider```进行交互
-5. 需要注意的是，```Provider```只是暴露了整个服务类，并没有暴露具体方法，因此当```Consumer```通过invoker将invocation发送给Provider时，Provider需要根据invocation传进来的方法名找到服务类中对应的方法进行处理
+5. 当```Consumer```通过invoker将invocation发送给Provider时，Provider需要根据invocation传进来的方法名找到服务类中对应的方法进行处理
 6. 我们给Provider被调用方法打上断点，令Consumer进行调用，即可看到Provider的调用链
 7. 根据netty的原理，现在channel已经创建好了，那么channel上的事件一旦发生，会交由handler进行处理
 8. 请求先是到达```HeaderExchangeHandler```，其中```handleRequest```方法完成请求处理
@@ -381,7 +383,7 @@
 服务引用
 
 * 给orderService注入属性时，会发现带了@Reference的userService变量，会先根据对应的Reference注解后置处理器生成一个userService代理对象再赋值给orderService
-* 生成代理的过程中，会去注册中心进行订阅，注册中心会发布相关provider地址，拿到provider地址后与服务器建立连接，将连接保存在代理中
+* 生成代理的过程中，会去注册中心进行订阅，注册中心会发布相关provider地址，拿到provider地址后与服务器建立连接，将连接保存在代理中，以后调用时就无需建立连接，更快
 * 下次使用代理对象的方法时，就能够直接使用保存好的连接往provider发送请求获取数据
 
 服务调用
@@ -391,6 +393,8 @@
 * 服务再找到与之匹配的方法完成调用并返回结果
 
 # 手写RPC框架
+
+《手写RPC.md》总结得更详细
 
 ## 框架总结
 
@@ -461,19 +465,20 @@
 
 ## 服务暴露
 
-1. dubbo为@Service注解标识的类生成一个ServiceBean并注册到容器中
-2. 手写的只是通过BeanPostProcessor判断是否有注释
-3. 虽然都能实现服务暴露，但dubbo能够真正生成一个bean，后续还能进行自动注入完成调用
+1. dubbo为@Service注解标识的类生成一个ServiceBean并注册到容器中，在postProcessBeanDefinitionRegistry时完成的，类似于@Componen扫描机制
+2. 手写的只是通过BeanPostProcessor判断Bean类上是否有@Service，有则将该Bean保存到Map中，并注册到zk中
+3. dubbo注册服务到zk中是暂时的，手写的是持久注册
 
 ## 服务引用
 
-1. dubbo为@Reference注解标识的属性会生成一个代理对象ReferenceBean并注册到容器中，并且ReferenceBean会绑定好一个已经建立的连接connection
+1. dubbo为@Reference注解标识的属性会生成一个代理对象ReferenceBean并注册到容器中，并且ReferenceBean会绑定好一个已经建立的连接connection，除此之外ReferenceBean也会注册到zk中
 2. 手写的只是通过BeanPostProcessor判断是否有注释，为orderService临时生成了一个代理对象注入到属性中，该代理对象并不会被注册到容器，意味着其他服务想注入时还得重新生成对应的代理对象，并且此时代理对象不会绑定一个connection，只是绑定了一个bootstrap，并没有进行connect
-3. dubbo的做法会更妥，当然手写的比较简单
+3. 引用过程最大的区别在于，dubbo先创建好了连接，那么真正使用时就能直接用了，只是说同一个服务在不同服务器上会对应多个invoker，需要通过负载均衡器来选择使用的invoker。那么手写的每次调用时都要先从zk中获取调用地址
 
 ## 服务调用
 
-1. 由于服务引用时，dubbo已经为每个consumer建立好connection，所以调用时直接使用connection完成调用
-2. 手写框架中，consumer进行invoke的时候，会使用绑定好的client(bootstrap)建立connection，获取channel，再进行远程调用
-3. 先建立连接的好处在于初始化就完成连接的创建，符合IOC的风格
+1. 由于服务引用时，dubbo已经为每个consumer建立好invokers，所以调用时根据负载均衡器选择使用哪个invoke进行调用
+2. 手写框架中，consumer进行invoke的时候，先去zk中获取到所有目标服务可能的服务器地址，根据负载均衡器选一个地址来建立连接，会使用绑定好的client(bootstrap)建立connection获取channel，再进行远程调用，如果同url的channel已经创建过了，那么直接拿来用，其实跟dubbo功能也差不多，都对channel做了一步缓存，相当于
+
+   
 
